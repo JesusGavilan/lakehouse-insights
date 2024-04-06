@@ -49,12 +49,13 @@ def get_insights_dataframe(file_catalog_dict: [dict]) -> List[pd.DataFrame]:
     for item in file_catalog_dict['data_catalog']:
         tables_overview.append(delta_overview(spark_session,
                                               path=item['path'],
+                                              name=item['name'],
                                               mandatory_cols=item['mandatory_attributes'],
                                               primary_keys=item['primary_keys']))
     return tables_overview
 
 
-def delta_overview(spark: SparkSession, path: str, mandatory_cols: List[str], primary_keys: List[str]) -> pd.DataFrame:
+def delta_overview(spark: SparkSession, path: str, name:str, mandatory_cols: List[str], primary_keys: List[str]) -> pd.DataFrame:
     details_df = spark.sql("DESCRIBE DETAIL delta.`{}`".format(path))
     current_ts = datetime.now()
     total_count = spark.read.format("delta").load(str(path)).count()
@@ -69,6 +70,7 @@ def delta_overview(spark: SparkSession, path: str, mandatory_cols: List[str], pr
             (col("sizeInBytes") / (1000 ** 2)).alias("size_in_MB"),
             col("partitionColumns").alias("partition_cols"),
         )
+        .withColumn("name", lit(name))
         .withColumn("evaluated_at", to_date(lit(current_ts), timestamp_format))
         .withColumn("total_records", lit(total_count)))
     return details_df.toPandas()

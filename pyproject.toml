@@ -7,12 +7,13 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.9.7 || >3.9.7,<4.0"
-deltalake = "0.14.0"
+deltalake = "0.16.4"
 pyspark = "3.3.1"
 delta-spark = "2.1.1"
 streamlit = "1.29.0"
 pytest = "^7.4.3"
 streamlit-shadcn-ui = "0.1.18"
+polars = "^1.8.2"
 
 [build-system]
 requires = ["poetry-core"]

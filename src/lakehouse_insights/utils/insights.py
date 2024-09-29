@@ -1,25 +1,32 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import List
-import pyspark
-from delta import configure_spark_with_delta_pip
+
+from pyspark import sql
+from pyspark.sql.session import SparkSession
 from pyspark.sql.functions import (
     col,
     lit,
     to_date,
 )
-from pyspark.sql.session import SparkSession
+
+from deltalake import DeltaTable
+from delta import configure_spark_with_delta_pip
+
 import pandas as pd
+
+import polars as pl
 
 date_format = "MM-dd-yyyy"
 timestamp_format = "MM-dd-yyyy HH:mm:ss"
 
 lakehouse_formats = ['Delta', 'Iceberg', 'Hudi']
+iceberg_spark_jar = 'org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.3.0'
 
 
-def spark():
+def spark_delta():
     builder = (
-        pyspark.sql.SparkSession.builder.master("local[1]")
-        .appName("local")
+        sql.SparkSession.builder.master("local[1]")
+        .appName("local-spark-delta")
         .config("spark.executor.cores", "1")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
@@ -32,6 +39,32 @@ def spark():
     return spark
 
 
+def spark_iceberg(iceberg_catalog_name: str, warehouse_path: str):
+    builder = (
+        sql.SparkSession.builder.master("local[1]")
+        .enableHiveSupport()
+        .appName("local-spark-iceberg")
+        .config("spark.executor.cores", "1")
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        .config("spark.jars.packages", iceberg_spark_jar)
+        .config(
+            f"spark.sql.catalog.{iceberg_catalog_name}",
+            "org.apache.iceberg.spark.SparkCatalog"
+        )
+        .config(
+            f"spark.sql.catalog.{iceberg_catalog_name}.type",
+            "hadoop"
+        )
+        .config(
+            f"spark.sql.catalog.{iceberg_catalog_name}.warehouse",
+            f"{warehouse_path}"
+        )
+        .config("spark.sql.catalog.iceberg_catalog.cache-enabled","false")
+        .config("spark.sql.defaultCatalog", f"{iceberg_catalog_name}")
+    )
+    return builder.getOrCreate()
+
+
 def filter_from_catalog(file_catalog: [dict]) -> dict:
     results = dict()
     if file_catalog is not None:
@@ -40,7 +73,7 @@ def filter_from_catalog(file_catalog: [dict]) -> dict:
 
 
 def get_insights_dataframe(file_catalog_dict: [dict]) -> List[pd.DataFrame]:
-    spark_session = spark()
+    spark_session = spark_delta()
 
     file_catalog_dict = filter_from_catalog(file_catalog_dict)
 
@@ -55,7 +88,7 @@ def get_insights_dataframe(file_catalog_dict: [dict]) -> List[pd.DataFrame]:
     return tables_overview
 
 
-def delta_overview(spark: SparkSession, path: str, name:str, mandatory_cols: List[str], primary_keys: List[str]) -> pd.DataFrame:
+def delta_overview(spark: SparkSession, path: str, name:str) -> pd.DataFrame:
     details_df = spark.sql("DESCRIBE DETAIL delta.`{}`".format(path))
     current_ts = datetime.now()
     total_count = spark.read.format("delta").load(str(path)).count()
@@ -74,3 +107,32 @@ def delta_overview(spark: SparkSession, path: str, name:str, mandatory_cols: Lis
         .withColumn("evaluated_at", to_date(lit(current_ts), timestamp_format))
         .withColumn("total_records", lit(total_count)))
     return details_df.toPandas()
+
+def iceberg_overview(spark: SparkSession, path: str, name: str, mandatory_cols: List[str], primary_keys: List[str]) -> pd.DataFrame:
+    history = spark.read.format("iceberg").load(f"{name}.history")
+    files = spark.read.format("iceberg").load(f"{name}.files")
+    created_at = history.agg({"made_current_at": "min"}).collect()[0][0]
+    last_modified = history.agg({"made_current_at": "max"}).collect()[0][0]
+    number_of_files = files.count()
+
+
+def delta_overview_polars(path: str, name:str) -> pd.DataFrame:
+    dt = DeltaTable(path)
+    df = pl.read_delta(path)
+    total_records = df.__len__()
+    size_in_MB = df.estimated_size()  / (1000 ** 2)
+    #df.sql("SELECT COUNT(*) FROM self")
+
+    data = {'format': ["delta"],
+            'location': [path],
+            'created_at': [datetime.fromtimestamp(dt.metadata().created_time/1000)],
+            'updated_at': [None],
+            'number_of_files': [len(dt.files())],
+            'size_in_MB': [size_in_MB],
+            'partition_cols': [dt.metadata().partition_columns],
+            'name': [name],
+            'evaluated_at': [date.today().strftime(timestamp_format)],
+            'total_records': [total_records],
+            }
+    df = pd.DataFrame(data)
+    return df

@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from typing import List
 
+from pyiceberg.catalog import load_catalog
 from pyspark import sql
 from pyspark.sql.session import SparkSession
 from pyspark.sql.functions import (
@@ -136,3 +137,8 @@ def delta_overview_polars(path: str, name:str) -> pd.DataFrame:
             }
     df = pd.DataFrame(data)
     return df
+
+def iceberg_overview_native(catalog: str, table_name: str) -> pd.DataFrame:
+    catalog = load_catalog(catalog)
+    table = catalog.load_table(table_name)
+
